@@ -11,6 +11,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collection;
 import java.util.GregorianCalendar;
@@ -39,7 +40,9 @@ public class Pickler {
 	private int PROTOCOL = 2;
 	private PickleUtils utils;
 	private static Map<Class<?>, IObjectPickler> customPicklers=new HashMap<Class<?>, IObjectPickler>();
+	
 	private boolean useMemo=true;
+	private ArrayList<Object> memoList=new ArrayList<Object>();
 	
 	/**
 	 * Create a Pickler.
@@ -106,23 +109,132 @@ public class Pickler {
 			return;
 		}
 		
+		if(getMemo(o) != -1) {
+			return;
+		}
+		
 		// check the dispatch table
 		Class<?> t=o.getClass();
-		Pair<Boolean, Boolean> result=dispatch(t,o);    // returns:  output_ok, must_memo
-		if(result.a) {
-			if(result.b && useMemo) {
-				// @todo: add to memo
-			}
+		if(dispatch(o)) {    // returns:  output_ok
+			putMemo(o);
 			return;
 		}
 
 		throw new PickleException("couldn't pickle object of type "+t);
 	}
+	
+	public int getMemo(Object o) throws IOException {
+		int i=-1;
+		if(checkMemo(o) && (i=memoList.indexOf(o)) != -1) {
+			out.write(Opcodes.GET);
+			out.write((i+"\n").getBytes());
+		}
+		return i;
+	}
+	
+	public void putMemo(Object o) throws IOException {
+		if(checkMemo(o) && memoList.indexOf(o) == -1) {
+			int i=memoList.size();
+			memoList.add(i, o);
+			out.write(Opcodes.PUT);
+			out.write((i+"\n").getBytes());
+		}
+	}
+	
+	private boolean checkMemo(Object o) {
+		if(!useMemo) {
+			return false;
+		}
+		
+		Class<?> t=o.getClass();
+		// is it a primitive array?
+		Class<?> componentType = t.getComponentType();
+		if(componentType!=null) {
+			return true;
+		}
+		
+		// first the primitive types
+		if(o instanceof Boolean || t.equals(Boolean.TYPE)) {
+			return false;
+		}
+		if(o instanceof Byte || t.equals(Byte.TYPE)) {
+			return false;
+		}
+		if(o instanceof Short || t.equals(Short.TYPE)) {
+			return false;
+		}
+		if(o instanceof Integer || t.equals(Integer.TYPE)) {
+			return false;
+		}
+		if(o instanceof Long || t.equals(Long.TYPE)) {
+			return false;
+		}
+		if(o instanceof Float || t.equals(Float.TYPE)) {
+			return false;
+		}
+		if(o instanceof Double || t.equals(Double.TYPE)) {
+			return false;
+		}
+		if(o instanceof Character || t.equals(Character.TYPE)) {
+			return false;
+		}
+		
+		// check registry
+		IObjectPickler custompickler=customPicklers.get(t);
+		if(custompickler!=null) {
+			return true;
+		}
+		
+		// more complex types
+		if(o instanceof String) {
+			return true;
+		}
+		if(o instanceof BigInteger) {
+			return true;
+		} 
+		if(o instanceof BigDecimal) {
+			return true;
+		}
+		if(o instanceof Calendar) {
+			return true;
+		}
+		if(o instanceof Time) {
+			return true;
+		}
+		if(o instanceof TimeDelta) {
+			return true;
+		}
+		if(o instanceof java.util.Date) {
+			return true;
+		}
+		if(o instanceof Enum) {
+			return true;
+		}
+		if(o instanceof Set<?>) {
+			return true;
+		}
+		if(o instanceof Map<?,?>) {
+			return true;
+		}
+		if(o instanceof List<?>) {
+			return true;
+		}
+		if(o instanceof Collection<?>) {
+			return true;
+		}
+		// javabean		
+		if(o instanceof java.io.Serializable ) {
+			return true;
+		}
+		return false;
+		
+	}
 
 	/**
 	 * Process a single object to be pickled.
 	 */
-	private Pair<Boolean, Boolean> dispatch(Class<?> t, Object o) throws IOException {
+	private boolean dispatch(Object o) throws IOException {
+		Class<?> t=o.getClass();
 		// is it a primitive array?
 		Class<?> componentType = t.getComponentType();
 		if(componentType!=null) {
@@ -132,74 +244,74 @@ public class Pickler {
 				put_arrayOfObjects((Object[])o);
 			}
 			
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		
 		// first the primitive types
 		if(o instanceof Boolean || t.equals(Boolean.TYPE)) {
 			put_bool((Boolean)o);
-			return new Pair<Boolean,Boolean>(true,false);
+			return true;
 		}
 		if(o instanceof Byte || t.equals(Byte.TYPE)) {
 			put_long(((Byte)o).longValue());
-			return new Pair<Boolean,Boolean>(true,false);
+			return true;
 		}
 		if(o instanceof Short || t.equals(Short.TYPE)) {
 			put_long(((Short)o).longValue());
-			return new Pair<Boolean,Boolean>(true,false);
+			return true;
 		}
 		if(o instanceof Integer || t.equals(Integer.TYPE)) {
 			put_long(((Integer)o).longValue());
-			return new Pair<Boolean,Boolean>(true,false);
+			return true;
 		}
 		if(o instanceof Long || t.equals(Long.TYPE)) {
 			put_long(((Long)o).longValue());
-			return new Pair<Boolean,Boolean>(true,false);
+			return true;
 		}
 		if(o instanceof Float || t.equals(Float.TYPE)) {
 			put_float(((Float)o).doubleValue());
-			return new Pair<Boolean,Boolean>(true,false);
+			return true;
 		}
 		if(o instanceof Double || t.equals(Double.TYPE)) {
 			put_float(((Double)o).doubleValue());
-			return new Pair<Boolean,Boolean>(true,false);
+			return true;
 		}
 		if(o instanceof Character || t.equals(Character.TYPE)) {
 			put_string(""+o);
-			return new Pair<Boolean,Boolean>(true,false);
+			return true;
 		}
 		
 		// check registry
 		IObjectPickler custompickler=customPicklers.get(t);
 		if(custompickler!=null) {
 			custompickler.pickle(o, this.out, this);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		
 		// more complex types
 		if(o instanceof String) {
 			put_string((String)o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		if(o instanceof BigInteger) {
 			put_bigint((BigInteger)o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		} 
 		if(o instanceof BigDecimal) {
 			put_decimal((BigDecimal)o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		if(o instanceof Calendar) {
 			put_calendar((Calendar)o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		if(o instanceof Time) {
 			put_time((Time)o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		if(o instanceof TimeDelta) {
 			put_timedelta((TimeDelta)o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		if(o instanceof java.util.Date) {
 			// a java Date contains a date+time so map this on Calendar
@@ -208,34 +320,34 @@ public class Pickler {
 			Calendar cal=GregorianCalendar.getInstance();
 			cal.setTime(date);
 			put_calendar(cal);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		if(o instanceof Enum) {
 			put_string(o.toString());
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		if(o instanceof Set<?>) {
 			put_set((Set<?>)o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		if(o instanceof Map<?,?>) {
 			put_map((Map<?,?>)o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		if(o instanceof List<?>) {
 			put_collection((List<?>)o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		if(o instanceof Collection<?>) {
 			put_collection((Collection<?>)o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
 		// javabean		
 		if(o instanceof java.io.Serializable ) {
 			put_javabean(o);
-			return new Pair<Boolean,Boolean>(true,true);
+			return true;
 		}
-		return new Pair<Boolean,Boolean>(false,false);
+		return false;
 	}
 
 	void put_collection(Collection<?> list) throws IOException {
